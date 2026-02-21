@@ -50,6 +50,43 @@ def is_seq_container(item):
     k = item.data(0, Qt.UserRole) or item.text(0)
     return k == "sequence" and item.data(0, Qt.UserRole) != "__seq__"
 
+# ── Gendered Insert Widget ────────────────────────────────────────────────────
+class GenderedInsertWidget(QWidget):
+    def __init__(self, target_textedit, parent=None):
+        super().__init__(parent)
+        self.target = target_textedit
+        lay = QVBoxLayout(self); lay.setContentsMargins(0, 4, 0, 0); lay.setSpacing(4)
+        self.toggle_btn = QPushButton("⚥  Gendered variants  ▸")
+        self.toggle_btn.setFont(BTN_FONT); self.toggle_btn.setObjectName("btn_io")
+        self.toggle_btn.setCheckable(True)
+        self.toggle_btn.clicked.connect(lambda c: (self.body.setVisible(c),
+            self.toggle_btn.setText("⚥  Gendered variants  ▾" if c else "⚥  Gendered variants  ▸")))
+        lay.addWidget(self.toggle_btn)
+        self.body = QWidget(); body_l = QVBoxLayout(self.body)
+        body_l.setContentsMargins(0, 2, 0, 2); body_l.setSpacing(4)
+        lf = QFont(); lf.setPointSize(FONT_SIZE - 1)
+        self.inputs = {}
+        for pronoun, icon in [("he", "♂"), ("she", "♀"), ("they", "⚧")]:
+            row = QHBoxLayout(); row.setSpacing(6)
+            lbl = QLabel(f"{icon} {pronoun}:"); lbl.setFont(lf); lbl.setFixedWidth(52)
+            inp = QLineEdit(); inp.setFont(INPUT_FONT); inp.setMinimumHeight(32)
+            inp.setPlaceholderText(f"{pronoun} form…")
+            row.addWidget(lbl); row.addWidget(inp); body_l.addLayout(row)
+            self.inputs[pronoun] = inp
+        insert_btn = QPushButton("↩  Insert (he/she/they)")
+        insert_btn.setFont(BTN_FONT); insert_btn.setObjectName("btn_primary")
+        insert_btn.clicked.connect(self._insert); body_l.addWidget(insert_btn)
+        self.body.setVisible(False); lay.addWidget(self.body)
+
+    def _insert(self):
+        vals = [self.inputs[p].text().strip() for p in ("he", "she", "they")]
+        if not any(vals): return
+        cursor = self.target.textCursor()
+        cursor.insertText(f"({'/'.join(vals)})")
+        self.target.setTextCursor(cursor); self.target.setFocus()
+        for inp in self.inputs.values(): inp.clear()
+
+
 # ── YAML serializer ──────────────────────────────────────────────────────────
 
 # Custom string subclass used to flag values that must be double-quoted in YAML
@@ -136,16 +173,9 @@ class RightPanel(QWidget):
         self.stack.addWidget(self._build_cmd())     # 2
         self.stack.addWidget(self._build_chars())   # 3
 
-        sep = QLabel("─────────────")
-        sep.setAlignment(Qt.AlignCenter)
-        lay.addWidget(sep)
-
         self.import_btn = self._btn("⬆  Import YAML");   self.import_btn.setObjectName("btn_io")
         self.export_btn = self._btn("⬇  Export YAML");   self.export_btn.setObjectName("btn_io")
         self.chars_btn  = self._btn("✦  Characters");    self.chars_btn.setObjectName("btn_io")
-        lay.addWidget(self.import_btn)
-        lay.addWidget(self.export_btn)
-        lay.addWidget(self.chars_btn)
         self.chars_btn.clicked.connect(lambda: self.stack.setCurrentIndex(3))
 
     # helpers
@@ -296,10 +326,8 @@ class RightPanel(QWidget):
     # ── cmd panel ────────────────────────────────────────────────────────────
 
     def _switch_to_new_mode(self):
-        """Reset the cmd panel to add-new mode, keeping the current sequence target."""
         self.current_item = None
         self.delete_btn.hide()
-        # Clear the fields but keep whatever command type is currently selected
         self._load_fields_for_cmd(self.cmd_combo.currentText(), value="")
 
     def show_add_cmd(self, target_seq=None):
@@ -366,6 +394,7 @@ class RightPanel(QWidget):
             b.clicked.connect(lambda checked=False, te=w, cb=self._say_char_combo: self._insert_char_tag(te, cb))
             row.addWidget(b)
             self.fields_l.addLayout(row)
+            gw = GenderedInsertWidget(w); self.fields_l.addWidget(gw)
 
         elif cmd == "char":
             c = QComboBox(); c.setFont(INPUT_FONT); c.setMinimumHeight(36); c.setEditable(True)
@@ -559,12 +588,24 @@ class DialogueTreeEditor(QWidget):
         root_lay = QHBoxLayout(self); root_lay.setContentsMargins(4,4,4,4)
         self.splitter = QSplitter(Qt.Horizontal); root_lay.addWidget(self.splitter)
 
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setMinimumWidth(320)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.panel = RightPanel(self)
+        self.panel.import_btn.clicked.connect(self._import)
+        self.panel.export_btn.clicked.connect(self._export)
+
         left = QWidget(); ll = QVBoxLayout(left); ll.setContentsMargins(6,6,6,6); ll.setSpacing(6)
         hdr = QLabel("✦  VN EDITOR"); hdr.setObjectName("lbl_header"); hdr.setFont(TREE_FONT)
         ll.addWidget(hdr)
         b_new = QPushButton("+ New Sequence"); b_new.setFont(BTN_FONT)
         b_new.setObjectName("btn_new"); b_new.clicked.connect(self.add_sequence)
-        row = QHBoxLayout(); row.addWidget(b_new); row.addStretch(); ll.addLayout(row)
+        row = QHBoxLayout()
+        row.addWidget(b_new)
+        row.addWidget(self.panel.import_btn)
+        row.addWidget(self.panel.export_btn)
+        row.addWidget(self.panel.chars_btn)
+        row.addStretch(); ll.addLayout(row)
 
         self.tree = VNTreeWidget()
         self.tree.setFont(TREE_FONT); self.tree.setHeaderLabels(["key","value"])
@@ -575,12 +616,6 @@ class DialogueTreeEditor(QWidget):
         self.tree.itemSelectionChanged.connect(self._on_sel)
         ll.addWidget(self.tree); self.splitter.addWidget(left)
 
-        scroll = QScrollArea(); scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(320)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.panel = RightPanel(self)
-        self.panel.import_btn.clicked.connect(self._import)
-        self.panel.export_btn.clicked.connect(self._export)
         scroll.setWidget(self.panel); self.splitter.addWidget(scroll)
         self.splitter.setStretchFactor(0, 1); self.splitter.setStretchFactor(1, 0)
         self.splitter.setCollapsible(0, False); self.splitter.setCollapsible(1, False)
@@ -733,8 +768,6 @@ class DialogueTreeEditor(QWidget):
         else:
             node = self._make_cmd_node(cmd, value)
 
-        # Insert after the current position using the same logic as _insert_after,
-        # but also handle the case where we need to find the right sequence container
         cur = self._cur()
         inserted = False
 
@@ -742,31 +775,27 @@ class DialogueTreeEditor(QWidget):
             key = cur.data(0, Qt.UserRole) or cur.text(0)
 
             if is_seq_container(cur):
-                # Clicked on sequence tag itself — append inside it
                 cur.addChild(node)
                 inserted = True
             elif self._is_seq(cur):
                 sc = self._find_seq_container(cur)
                 if sc: sc.addChild(node); inserted = True
             elif key == "choice":
-                # After a choice, insert in its parent sequence container
                 parent = cur.parent()
                 if parent:
                     idx = parent.indexOfChild(cur)
                     parent.insertChild(idx + 1, node)
                     inserted = True
             else:
-                # Regular command node — insert after it in its parent
                 parent = cur.parent()
                 if parent:
                     pkey = parent.data(0, Qt.UserRole) or parent.text(0)
-                    if pkey != "choice":  # don't insert siblings of options
+                    if pkey != "choice":
                         idx = parent.indexOfChild(cur)
                         parent.insertChild(idx + 1, node)
                         inserted = True
 
         if not inserted:
-            # Fallback: find nearest sequence container and append
             target = self.panel.current_seq
             if not target or (target.data(0, Qt.UserRole) != "sequence" and target.text(0) != "sequence"):
                 node_walk = cur
@@ -875,9 +904,6 @@ class DialogueTreeEditor(QWidget):
     def _build_seq(self, parent):
         if parent is None: return []
         seq = []
-        # NOTE: "background" intentionally excluded from skip — action backgrounds inside
-        # sequence containers must be exported. The meta background (child of __seq__) is
-        # handled separately below via parent key check.
         skip = {"title", "description", "characters", "__seq__"}
         for i in range(parent.childCount()):
             child = parent.child(i)
@@ -894,7 +920,6 @@ class DialogueTreeEditor(QWidget):
                     opts.append({"option": DoubleQuotedStr(opt_text), "sequence": self._build_seq(sc) if sc else []})
                 seq.append({"choice": opts})
             elif key == "background":
-                # Skip meta-level backgrounds (direct children of __seq__ nodes)
                 p = child.parent()
                 if p and (p.data(0, Qt.UserRole) or p.text(0)) == "__seq__":
                     continue
@@ -906,7 +931,6 @@ class DialogueTreeEditor(QWidget):
                     entry = {"background": p_parts[0].strip(), "fadeout": fade}
                 seq.append(entry)
             elif key == "say":
-                # DoubleQuotedStr forces the YAML dumper to always use " instead of '
                 seq.append({"say": DoubleQuotedStr(value.strip('"'))})
             elif key == "wait":
                 try: seq.append({"wait": int(value) if "." not in value else float(value)})
